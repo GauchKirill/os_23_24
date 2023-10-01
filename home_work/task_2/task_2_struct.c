@@ -4,128 +4,75 @@
 #include <string.h>
 #include <stdio.h>
 #include <wait.h>
-#include <time.h>
 #include "task_2.h"
 
 #define BUF_SZ 4096
 
-size_t send_msg_(Pipe *self);
-size_t receive_msg_(Pipe *self);
+size_t send_msg(Pipe *self);
+size_t receive_msg(Pipe *self);
 
-typedef struct op_table
+void pipe_ctor(Pipe *ppipe)
 {
-    size_t (*rcv)(Pipe *self); 
-    size_t (*snd)(Pipe *self); 
-} Ops;
+    ppipe->len = 0;
+    ppipe->data = (char*) calloc(BUF_SZ, sizeof(char));
+    pipe(ppipe->fd_direct);
+    pipe(ppipe->fd_back);
 
-typedef struct Pipe_
-{
-        char* data;
-        int fd_direct[2];
-        int fd_back[2];
-        size_t len;
-        Ops actions;
-} Pipe;
-
-DuplexPipe *ctor_dup_pipe()
-{
-    DuplexPipe *duplex_pipe = (DuplexPipe*) calloc(1, sizeof(DuplexPipe));
-    duplex_pipe->parent = (Pipe*) calloc(1, sizeof(Pipe));
-    duplex_pipe->child  = (Pipe*) calloc(1, sizeof(Pipe));
-    duplex_pipe->parent->len = duplex_pipe->child->len = 0;
-
-    pipe(duplex_pipe->parent->fd_direct);
-    pipe(duplex_pipe->child->fd_direct);
-
-    for (int i = 0; i < 2; i++)
-    {
-        duplex_pipe->parent->fd_back[i] = duplex_pipe->child->fd_direct[i];
-        duplex_pipe->child->fd_back[i]  = duplex_pipe->parent->fd_direct[i];
-    }
-
-    duplex_pipe->parent->actions.rcv = duplex_pipe->child->actions.rcv = receive_msg_;
-    duplex_pipe->parent->actions.snd = duplex_pipe->child->actions.snd = send_msg_;
-
-    return duplex_pipe;
+    ppipe->actions.rcv = &receive_msg;
+    ppipe->actions.snd = &send_msg;    
 }
 
-void dtor_dup_pipe(DuplexPipe *dup_pipe)
+
+void pipe_dtor(Pipe *ppipe)
 {
-    if (!dup_pipe) return;
-    if (dup_pipe->parent)   free(dup_pipe->parent);
-    if (dup_pipe->child)    free(dup_pipe->child);
-    free(dup_pipe);
+    if (!ppipe || !ppipe->data) return;
+    free(ppipe->data);
+    ppipe->actions.rcv = ppipe->actions.snd = NULL;
+    ppipe->len = 0;
+    return;
 }
 
-size_t send_msg_(Pipe *self)
+size_t send_msg(Pipe *self)
 {
-    if (!self->data) return 0;
-    printf("sending... %s\n", self->data);
-    size_t cnt_wrote = 0;
-    const char *buf = self->data;
-    size_t lenght = self->len;
-    while ((cnt_wrote += write(self->fd_direct[1], buf, lenght - cnt_wrote)) < lenght);
-    printf("sent\n");
+    if (!self || !self->data) return 0;
+    size_t wrote = write(self->fd_direct[1], self->data, self->len);
+    self->len = 0;
+    return wrote;
 }
 
-size_t receive_msg_(Pipe *self)
+size_t receive_msg(Pipe *self)
 {
-    printf("receiving...\n");
-    self->data = (char*) calloc(BUF_SZ, sizeof(char));
+    if (!self || !self->data) return 0;
     size_t cnt_read = 0;
-    while ((cnt_read = read(self->fd_back[0], self->data + self->len, BUF_SZ)) > 0)
-    {
-        printf("read: %ld\n", cnt_read);
-        self->len += cnt_read;
-        self->data = (char*) realloc(self->data, self->len + BUF_SZ);
-    }
-    self->data = (char*) realloc(self->data, self->len);
-    printf("received\n");
+    self->len = read(self->fd_back[0], self->data, BUF_SZ);
     return self->len;
 }
 
-void send_msg(char* data, DuplexPipe *dup_pipe)
+void parent_process(Pipe* ppipe, FILE* input, FILE* output)
 {
-    if (!data) return;
-
-    dup_pipe->parent->data = data;
-    dup_pipe->parent->len = strlen(data);
-
-    pid_t pid = fork();
-    if (pid < 0)
+    size_t cnt_read = 0;
+    while (1)
     {
-        perror("fork");       
-        return;
-    }
-    else
-    if (pid)
-    {
-        dup_pipe->parent->actions.snd(dup_pipe->parent);
-        sleep(1);
-        dup_pipe->parent->actions.rcv(dup_pipe->parent);
-        int status = 0;
-        waitpid(pid, &status, 0);
-        if (WEXITSTATUS(status))
-        {
-            printf("child %d fiald: exit code %d\n", pid, WEXITSTATUS(status));
-            exit(1);
-        }
+        cnt_read = fread(ppipe->data, sizeof(char), BUF_SZ, input);
+        ppipe->len = cnt_read;
+        ppipe->actions.snd(ppipe);
+        if(ppipe->actions.rcv(ppipe))
+            fwrite(ppipe->data, sizeof(char), ppipe->len, output);
         else
-        {
-            if(dup_pipe->parent->data)
-            {
-                fgets(dup_pipe->parent->data, dup_pipe->parent->len, stdout);
-                free(dup_pipe->parent->data);
-            }
-        }
-        exit(0);
+            break;
     }
-    else
-    {
-        dup_pipe->child->actions.rcv(dup_pipe->child);
-        dup_pipe->child->actions.snd(dup_pipe->child);
-        if (dup_pipe->child->data)  free(dup_pipe->child->data);
-        exit(0);
-    }
+    wait(NULL);
+    fclose(input);
+    fclose(output);
+    exit(0);
+}
 
+void child_process(Pipe* ppipe)
+{
+    while (!ppipe->actions.rcv(ppipe));
+    do
+    {
+        ppipe->actions.snd(ppipe);
+    } while (ppipe->actions.rcv(ppipe));
+    exit(0);    
 }

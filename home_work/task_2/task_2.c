@@ -1,15 +1,41 @@
 #include <stdio.h>
-#include <stdlib.h>
+#include <aio.h>
+#include <unistd.h>
 #include "task_2.h"
 
-int main()
+int main(int argc, char** argv)
 {
-    DuplexPipe *dup_pipe = ctor_dup_pipe();
+    if (argc != 3)
+    {
+        printf("Enter 2 name files in args. First - input file, second - ontput file\n");
+        return 0;
+    }
+    FILE    *input  = fopen(argv[1], "r"),
+            *output = fopen(argv[2], "w");
     
-    size_t n = 0;
-    char *s = NULL;
-    getline(&s, &n, stdin);
-    send_msg(s, dup_pipe);
-    free(s);
-    dtor_dup_pipe(dup_pipe);
+    if (!input || ! output) return 1;
+
+    Pipe ppipe = {};
+    pipe_ctor(&ppipe);
+
+    pid_t pid = fork();
+
+    if (pid < 0)
+    {
+        perror("fork");       
+        return 0;
+    }
+    else
+    if (pid)
+        parent_process(&ppipe, input, output);
+    else
+    {
+        for (int i = 0, temp; i < 2; i++)
+        {
+            temp = ppipe.fd_direct[i];
+            ppipe.fd_direct[i] = ppipe.fd_back[i];
+            ppipe.fd_back[i] = temp;
+        }
+        child_process(&ppipe);
+    }
 }

@@ -3,14 +3,24 @@
 
 typedef struct Pipe_ Pipe;
 
-typedef struct DuplexPipe_
+typedef struct op_table
 {
-    Pipe *parent;
-    Pipe *child;
-} DuplexPipe;
+    size_t (*rcv)(Pipe *self); 
+    size_t (*snd)(Pipe *self); 
+} Ops;
 
-DuplexPipe *ctor_dup_pipe();
-void dtor_dup_pipe(DuplexPipe*);
-void send_msg(char*, DuplexPipe*);
+typedef struct Pipe_
+{
+        char* data;
+        int fd_direct[2];
+        int fd_back[2];
+        size_t len;
+        Ops actions;
+} Pipe;
+
+void pipe_ctor(Pipe*);
+void pipe_dtor(Pipe*);
+void parent_process(Pipe*, FILE*, FILE*);
+void child_process(Pipe*);
 
 #endif
