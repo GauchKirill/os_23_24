@@ -1,0 +1,114 @@
+#include <stdio.h>
+#include <pthread.h>
+#include <math.h>
+#include <stdlib.h>
+#include <sys/time.h>
+
+#include "settings.h"
+
+static const long long unsigned CNT_THREADS          = THREADS_ON_SIDE_X * THREADS_ON_SIDE_Y;
+static const long long unsigned THREADS_POINTS       = CNT_POINTS / CNT_THREADS;
+
+static double square = 0.0;
+
+unsigned int seed = 0;
+
+pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER;
+
+double func(double x)
+{
+    return x;   
+}
+
+typedef struct Thread_args_
+{
+    double low_x;
+    double step_x;
+    double low_y;
+    double step_y;
+    double square;
+} Thread_args;
+
+void *thread_func(void *data)
+{
+    Thread_args *thread_args = (Thread_args*) data;
+    double x, y;
+    srand((unsigned) time(NULL));
+    for (long long unsigned i = 0; i < THREADS_POINTS; i++)
+    {
+        x = thread_args->low_x + (double) rand_r(&seed) / RAND_MAX * (thread_args->step_x);
+        y = thread_args->low_y + (double) rand_r(&seed) / RAND_MAX * (thread_args->step_y);
+
+        if (y < func(x)) 
+            thread_args->square += 1;
+    }
+    pthread_mutex_lock(&m);
+    square += thread_args->square;
+    pthread_mutex_unlock(&m);    
+    return NULL;
+}
+
+
+int experiment(double *exp_square, double *exp_time)
+{
+    const double left_x = 0.0;
+    const double right_x = 1.0;  
+    const double height_y = 1.0;
+    const double low_y = 0.0;
+
+    const double step_x = (right_x - left_x) / THREADS_ON_SIDE_X;
+    const double step_y = (height_y - low_y) / THREADS_ON_SIDE_Y;
+
+    pthread_t   tread[CNT_THREADS];
+    Thread_args  tread_args[CNT_THREADS];
+
+    seed = (unsigned) time(NULL);
+
+    struct timeval tv1, tv2, dtv;
+    gettimeofday(&tv1, NULL);
+
+    for(long long unsigned i = 0; i < CNT_THREADS; i++)
+    {
+        tread_args[i].low_x     = left_x + step_x * (i % THREADS_ON_SIDE_X);
+        tread_args[i].step_x    = step_x;
+        tread_args[i].low_y     = low_y + step_y * (i / THREADS_ON_SIDE_X);
+        tread_args[i].step_y    = step_y;
+        tread_args[i].square = 0;
+        pthread_create(&tread[i], NULL, thread_func, tread_args + i);
+    }
+
+    for (long long unsigned i = 0; i < CNT_THREADS; i++)
+    {
+        pthread_join(tread[i], NULL);
+    }
+
+    gettimeofday(&tv2, NULL);
+    square /= CNT_POINTS;
+
+    *exp_square = square;
+    *exp_time = (tv2.tv_sec - tv1.tv_sec) + (double) (tv2.tv_usec - tv1.tv_usec) / 1000000;
+
+    return 0;
+}
+
+int main()
+{
+    double  exp_square      = 0,
+            exp_time        = 0,
+            average_area    = 0,
+            average_time    = 0;
+
+    for (unsigned i = 0; i < CNT_EXP; i++)
+    {
+        experiment(&exp_square, &exp_time);
+        average_area += exp_square;
+        average_time += exp_time;
+    }
+
+    printf( "Experiment:\n"
+            "Count experiments: %u\n"
+            "Count points: %lld\n"
+            "Count treads: %lld\n"
+            "Average area: %lf\n"
+            "Process time: %lf s\n", CNT_EXP, CNT_POINTS, CNT_THREADS, average_area / CNT_EXP, average_time / CNT_EXP);
+}
