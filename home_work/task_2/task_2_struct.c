@@ -6,7 +6,7 @@
 #include <wait.h>
 #include "task_2.h"
 
-#define BUF_SZ 10
+#define BUF_SZ 4096
 
 size_t send_msg(Pipe *self);
 size_t receive_msg(Pipe *self);
@@ -18,8 +18,8 @@ void pipe_ctor(Pipe *ppipe)
     pipe(ppipe->fd_direct);
     pipe(ppipe->fd_back);
 
-    ppipe->actions.rcv = &receive_msg;
-    ppipe->actions.snd = &send_msg;    
+    ppipe->actions.rcv = receive_msg;
+    ppipe->actions.snd = send_msg;    
 }
 
 
@@ -36,7 +36,7 @@ size_t send_msg(Pipe *self)
 {
     if (!self || !self->data) return 0;
     size_t wrote = write(self->fd_direct[1], self->data, self->len);
-    self->len = 0;
+    self->len -= wrote;
     return wrote;
 }
 
@@ -50,6 +50,8 @@ size_t receive_msg(Pipe *self)
 
 void parent_process(Pipe* ppipe, FILE* input, FILE* output)
 {
+    close(ppipe->fd_direct[0]);
+    close(ppipe->fd_back[1]);
     size_t cnt_read = 0;
     while (1)
     {
@@ -60,10 +62,10 @@ void parent_process(Pipe* ppipe, FILE* input, FILE* output)
         else
             close(ppipe->fd_direct[1]);
 
-        if(ppipe->actions.rcv(ppipe))
-            fwrite(ppipe->data, sizeof(char), ppipe->len, output);
-        else
+        if(ppipe->actions.rcv(ppipe) == 0 && cnt_read == 0)
             break;
+        else
+            fwrite(ppipe->data, sizeof(char), ppipe->len, output);
     }
     close(ppipe->fd_back[0]);
     wait(NULL);
@@ -74,10 +76,10 @@ void parent_process(Pipe* ppipe, FILE* input, FILE* output)
 
 void child_process(Pipe* ppipe)
 {
-    while (ppipe->actions.rcv(ppipe));
-    {
-        ppipe->actions.snd(ppipe);
-    }
+    close(ppipe->fd_direct[0]);
+    close(ppipe->fd_back[1]);
+    while (ppipe->actions.rcv(ppipe))
+        while (ppipe->actions.snd(ppipe));
 
     close(ppipe->fd_back[0]);
     close(ppipe->fd_direct[1]);
