@@ -43,8 +43,6 @@ int fifo_way(FILE* input, FILE* output)
         close(fd);
         int status;
         waitpid(pid, &status, 0);
-        if (!WEXITSTATUS(status))
-            return 3;
         return 0;
     }
     else
@@ -61,7 +59,7 @@ int fifo_way(FILE* input, FILE* output)
         } while (size == BUF_SZ);
         
         close(fd);
-        return 0;
+        exit(0);
     }
 }
 
@@ -112,8 +110,6 @@ int queue_way(FILE* input, FILE* output)
 
         int status;
         waitpid(pid, &status, 0);
-        if (!WEXITSTATUS(status))
-            return 3;
         return 0;
     }
     else
@@ -134,7 +130,7 @@ int queue_way(FILE* input, FILE* output)
             size_t len = strlen(msg_buf.mtext);
             fwrite(msg_buf.mtext, sizeof(char), len, output);
         }
-        return 0;
+        exit(0);
     }
     
 }
@@ -185,8 +181,6 @@ int shm_way(FILE* input, FILE* output)
 
         int status;
         waitpid(pid, &status, 0);
-        if (!WEXITSTATUS(status))
-            return 3;
         return 0;
     }
     else
@@ -212,19 +206,15 @@ int shm_way(FILE* input, FILE* output)
                 else
                     break;
             }
-            
         }
 
         shmdt(ptr);
         shmctl(KEY, IPC_RMID, NULL);
-        return 0;
+        exit(0);
     }
-
-    return 0;
 }
 
 #endif
-
 
 int main(int argc, char** argv)
 {
@@ -241,10 +231,6 @@ int main(int argc, char** argv)
     #if defined(FIFO)
 
         mknod(FIFO_NAME, S_IFIFO | 0666, 0);
-
-    #elif defined(QUEUE)
-
-    #elif defined(SHM)
 
     #endif
 
@@ -265,21 +251,20 @@ int main(int argc, char** argv)
 
     gettimeofday(&tv2, NULL);
 
-    fclose(input);
-    fclose(output);
-
     #if  defined(FIFO)
-        FILE* res_file = fopen("fifo_res.txt", "a");
+        FILE* res_file = fopen("data/fifo_res.txt", "a");
     #elif defined(QUEUE)
-        FILE* res_file = fopen("queue_res.txt", "a");
+        FILE* res_file = fopen("data/queue_res.txt", "a");
     #elif defined(SHM)
-        FILE* res_file = fopen("shm_res.txt", "a");
+        FILE* res_file = fopen("data/shm_res.txt", "a");
     #endif
 
     dtv.tv_usec = tv2.tv_usec - tv1.tv_usec;
     dtv.tv_sec = tv2.tv_sec - tv1.tv_sec;
-    printf("%ld us\n", dtv.tv_usec + 1000000 * dtv.tv_sec);
-    //fprintf(res_file, "%ld\n", dtv.tv_usec + 1000000 * dtv.tv_sec);
+    fprintf(res_file, "%ld\n", dtv.tv_usec + 1000000 * dtv.tv_sec);
+
+    fclose(input);
+    fclose(output);
     fclose(res_file);
     return 0;
 }
