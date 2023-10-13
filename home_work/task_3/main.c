@@ -13,8 +13,6 @@
 #include <sys/types.h>
 #include <semaphore.h>
 
-#define SHM
-
 #define BUF_SZ 4096
 
 #if defined(FIFO)
@@ -62,6 +60,7 @@ int fifo_way(FILE* input, FILE* output)
             fwrite(buf, sizeof(char), size, output);
         } while (size == BUF_SZ);
         
+        close(fd);
         return 0;
     }
 }
@@ -70,6 +69,8 @@ int fifo_way(FILE* input, FILE* output)
 
 #define KEY 10
 #define TYPE 1
+
+#define exit_word "q"
 
 typedef struct msgbuf {
     long    mtype;
@@ -105,7 +106,7 @@ int queue_way(FILE* input, FILE* output)
             msgsnd(msqid, &msg_buf, buf_len, 0);
         }
 
-        strcpy(msg_buf.mtext, "q");
+        strcpy(msg_buf.mtext, exit_word);
         size_t buf_len = strlen(msg_buf.mtext) + 1;
         msgsnd(msqid, &msg_buf, buf_len, 0);
 
@@ -127,7 +128,7 @@ int queue_way(FILE* input, FILE* output)
                 continue;
             }
             msg_buf.mtext[BUF_SZ - 1] = '\0';
-            if (strcmp(msg_buf.mtext, "q") == 0) {
+            if (strcmp(msg_buf.mtext, exit_word) == 0) {
                 break;
             }
             size_t len = strlen(msg_buf.mtext);
@@ -140,9 +141,13 @@ int queue_way(FILE* input, FILE* output)
 
 #elif defined(SHM)
 
+#define KEY 10
+#define NAME "sem"
+
+#define exit_word "q"
+
 int shm_way(FILE* input, FILE* output)
 {
-    sem_t *sem;
     pid_t pid = fork();
 
     if (pid < 0)
@@ -152,13 +157,74 @@ int shm_way(FILE* input, FILE* output)
     }
     if (pid)
     {
+        sem_t* sem;
+        sem = sem_open(NAME, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR, 1);
 
+        int res = shmget(KEY, BUF_SZ, 0644 | IPC_CREAT);
+        if (res == -1) {
+            perror("shmget");
+            return 1;
+        }
+        char data[BUF_SZ];
+        void* ptr = shmat(res, NULL, 0);
+
+        while (1) {
+            if (((char*) ptr)[BUF_SZ] == '*')
+            {
+                size_t num = 0;
+                num = fread(data, sizeof(char), BUF_SZ - 1, input);
+                data[num] = '\0';
+                sprintf((char*) ptr, "%s", data);
+                ((char*) ptr)[BUF_SZ] = '\0';
+                if (num == 0) {
+                    break;
+                }
+            }
+        }
+
+        shmdt(ptr);
+        shmctl(KEY, IPC_RMID, NULL);
+
+        int status;
+        waitpid(pid, &status, 0);
+        if (!WEXITSTATUS(status))
+            return 3;
+        return 0;
     }
     else
-    {
-        
+    {        
+        sem_t* sem;
+        sem = sem_open(NAME, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR, 1);
+        int res = shmget(KEY, BUF_SZ, 0644 | IPC_CREAT);
+        if (res == -1) {
+            perror("shmget");
+            return 1;
+        }
+        void* ptr = shmat(res, NULL, 0);
+
+        ((char*) ptr)[BUF_SZ] = '*';
+
+        while (1) {
+            if (((char*) ptr)[BUF_SZ] == '\0')
+            {
+                size_t lenght = strlen((char*) ptr);
+                if (lenght)
+                {
+                    fwrite((char*)ptr, sizeof(char), lenght, output);
+                    ((char*) ptr)[BUF_SZ] = '*';
+                }
+                else
+                    break;
+            }
+            
+        }
+
+        shmdt(ptr);
+        shmctl(KEY, IPC_RMID, NULL);
+        return 0;
     }
 
+    return 0;
 }
 
 #endif
@@ -207,16 +273,16 @@ int main(int argc, char** argv)
     fclose(output);
 
     #if  defined(FIFO)
-        printf("fifo ran: ");
+        FILE* res_file = fopen("fifo_res.txt", "a");
     #elif defined(QUEUE)
-        printf("queue ran: ");
+        FILE* res_file = fopen("queue_res.txt", "a");
     #elif defined(SHM)
-        printf("map ran: ");
+        FILE* res_file = fopen("shm_res.txt", "a");
     #endif
 
     dtv.tv_usec = tv2.tv_usec - tv1.tv_usec;
     dtv.tv_sec = tv2.tv_sec - tv1.tv_sec;
     printf("%ld us\n", dtv.tv_usec + 1000000 * dtv.tv_sec);
-
+    //fprintf(res_file, "%ld\n", dtv.tv_usec + 1000000 * dtv.tv_sec);
     return 0;
 }
