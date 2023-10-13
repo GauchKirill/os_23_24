@@ -1,8 +1,8 @@
 #include <stdio.h>
 
 #define SMALL_SIZE  100
-#define NORMAL_SIZE 4096
-#define BIG_SIZE    8192
+#define NORMAL_SIZE 1 << 12
+#define BIG_SIZE    50 << 12
 
 int main()
 {

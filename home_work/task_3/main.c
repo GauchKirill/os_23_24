@@ -13,7 +13,7 @@
 #include <sys/types.h>
 #include <semaphore.h>
 
-#define BUF_SZ 4096
+#define BUF_SZ 4095
 
 #if defined(FIFO)
 
@@ -144,10 +144,11 @@ int queue_way(FILE* input, FILE* output)
 #define KEY 10
 #define NAME "sem"
 
-#define exit_word "q"
-
 int shm_way(FILE* input, FILE* output)
 {
+    sem_t* sem;
+    sem = sem_open(NAME, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR, 1);
+
     pid_t pid = fork();
 
     if (pid < 0)
@@ -157,9 +158,6 @@ int shm_way(FILE* input, FILE* output)
     }
     if (pid)
     {
-        sem_t* sem;
-        sem = sem_open(NAME, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR, 1);
-
         int res = shmget(KEY, BUF_SZ, 0644 | IPC_CREAT);
         if (res == -1) {
             perror("shmget");
@@ -192,9 +190,7 @@ int shm_way(FILE* input, FILE* output)
         return 0;
     }
     else
-    {        
-        sem_t* sem;
-        sem = sem_open(NAME, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR, 1);
+    {
         int res = shmget(KEY, BUF_SZ, 0644 | IPC_CREAT);
         if (res == -1) {
             perror("shmget");
@@ -284,5 +280,6 @@ int main(int argc, char** argv)
     dtv.tv_sec = tv2.tv_sec - tv1.tv_sec;
     printf("%ld us\n", dtv.tv_usec + 1000000 * dtv.tv_sec);
     //fprintf(res_file, "%ld\n", dtv.tv_usec + 1000000 * dtv.tv_sec);
+    fclose(res_file);
     return 0;
 }
