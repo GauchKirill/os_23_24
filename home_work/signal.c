@@ -3,18 +3,43 @@
 #include <stdio.h>
 #include <sys/types.h>
 
-void sender(const char* input_file)
-{
-    FILE *input = fopen(input_file, "r");
+FILE *input = NULL;
+FILE *output = NULL;
 
-    close(input);
+void sig_handler(int signo, siginfo_t *info, void *context)
+{
+    switch (signo)
+    {
+    case :
+        /* code */
+        break;
+    
+    default:
+        break;
+    }
 }
 
-void resiver(const char* output_file)
+void sender(int child_pid)
 {
-    FILE *output = fopen(output_file, "w");
+    struct sigaction sa;
+    sa.sa_flags = SA_SIGINFO;
+    sa.sa_sigaction = sig_handler;
 
-    close(output);
+    while (1)
+    {
+        pause();
+    }
+    
+    return;
+}
+
+void resiver(int parent_pid)
+{
+    while (1)
+    {
+        pause();
+    }
+    return;
 }
 
 int main(int argc, char** argv)
@@ -25,22 +50,19 @@ int main(int argc, char** argv)
         return 0;
     }
 
+    input = fopen(argv[1], "r");
+    output = fopen(argv[2], "w");
     pid_t pid = fork();
 
     if (pid < 0)
-    {
         perror("fork()");
-        return 0;
-    }
     else
     if (pid)
-    {
-        sender(argv[1]);
-        return 0;
-    }
+        sender();
     else
-    {
-        resiver(argv[2]);
-        return 0;
-    }
+        resiver();
+
+    close(input);
+    close(output);
+    return 0;
 }
