@@ -3,6 +3,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <sys/time.h>
+#include <string.h>
 
 #include "settings.h"
 
@@ -62,25 +63,27 @@ int experiment(double *exp_square, double *exp_time)
     pthread_t   tread[CNT_THREADS];
     Thread_args  tread_args[CNT_THREADS];
 
-    seed = (unsigned) time(NULL);
-
-    struct timeval tv1, tv2, dtv;
-    gettimeofday(&tv1, NULL);
-
-    for(long long unsigned i = 0; i < CNT_THREADS; i++)
+    for (long long unsigned i = 0; i < CNT_THREADS; i++)
     {
         tread_args[i].low_x     = left_x + step_x * (i % THREADS_ON_SIDE_X);
         tread_args[i].step_x    = step_x;
         tread_args[i].low_y     = low_y + step_y * (i / THREADS_ON_SIDE_X);
         tread_args[i].step_y    = step_y;
-        tread_args[i].square = 0;
+        tread_args[i].square    = 0;
+    }
+
+    seed = (unsigned) time(NULL);
+
+    struct timeval tv1, tv2;
+    gettimeofday(&tv1, NULL);
+
+    for(long long unsigned i = 0; i < CNT_THREADS; i++)
+    {
         pthread_create(&tread[i], NULL, thread_func, tread_args + i);
     }
 
     for (long long unsigned i = 0; i < CNT_THREADS; i++)
-    {
         pthread_join(tread[i], NULL);
-    }
 
     gettimeofday(&tv2, NULL);
     square /= CNT_POINTS;
@@ -91,24 +94,21 @@ int experiment(double *exp_square, double *exp_time)
     return 0;
 }
 
+#define LENGTH_NAME_FILE 100
+
 int main()
 {
     double  exp_square      = 0,
-            exp_time        = 0,
-            average_area    = 0,
-            average_time    = 0;
+            exp_time        = 0;
 
-    for (unsigned i = 0; i < CNT_EXP; i++)
-    {
-        experiment(&exp_square, &exp_time);
-        average_area += exp_square;
-        average_time += exp_time;
-    }
+    experiment(&exp_square, &exp_time);
 
-    printf( "Experiment:\n"
-            "Count experiments: %u\n"
-            "Count points: %lld\n"
-            "Count treads: %lld\n"
-            "Average area: %lf\n"
-            "Process time: %lf s\n", CNT_EXP, CNT_POINTS, CNT_THREADS, average_area / CNT_EXP, average_time / CNT_EXP);
+    char data_file[LENGTH_NAME_FILE] = "";
+    sprintf(data_file, "./data/%s%lld_treads.txt", (CNT_THREADS < 10) ? "0" : "", CNT_THREADS);
+    FILE* file = fopen(data_file, "a+");
+    if (!file)
+        return -1;
+    fprintf(file, "%lf\n", exp_time);
+    fclose(file);
+    return 0;
 }

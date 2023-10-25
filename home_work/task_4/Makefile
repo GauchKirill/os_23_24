@@ -1,3 +1,18 @@
 
-@all:
-	@gcc -O2 main.c -o square
+FLAGS = -Wall -Wextra -Wpedantic -Werror
+TARGET = square
+SOURCES = main.c
+
+.PHONY: square
+
+rebuild: clean build
+
+build: ${SOURCES}
+	gcc ${FLAGS} ${SOURCES} -o ${TARGET}
+
+run:
+	./${TARGET}
+
+clean:
+	rm ${TARGET}
+
