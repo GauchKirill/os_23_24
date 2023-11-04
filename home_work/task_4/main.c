@@ -1,16 +1,21 @@
-#include <stdio.h>
-#include <pthread.h>
 #include <math.h>
 #include <stdlib.h>
 #include <sys/time.h>
 #include <string.h>
+#define _GNU_SOURCE
+#include <sched.h>
+#include <pthread.h>
+#include <unistd.h>
+#include <stdio.h>
 
 #include "settings.h"
 
-static const long long unsigned CNT_THREADS          = THREADS_ON_SIDE_X * THREADS_ON_SIDE_Y;
-static const long long unsigned THREADS_POINTS       = CNT_POINTS / CNT_THREADS;
-
+static const long long unsigned CNT_THREADS         = THREADS_ON_SIDE_X * THREADS_ON_SIDE_Y;
+static const long long unsigned THREADS_POINTS      = CNT_POINTS / CNT_THREADS;
 static double square = 0.0;
+
+//static long numCore = 0;
+//static cpu_set_t cpuset;
 
 unsigned int seed = 0;
 
@@ -23,28 +28,34 @@ double func(double x)
 
 typedef struct Thread_args_
 {
-    double low_x;
-    double step_x;
-    double low_y;
-    double step_y;
-    double square;
+    double  low_x;
+    double  step_x;
+    double  low_y;
+    double  step_y;
+    long    numCore;
 } Thread_args;
 
-void *thread_func(void *data)
+void* thread_func(void *data)
 {
     Thread_args *thread_args = (Thread_args*) data;
-    double x, y;
+    //CPU_SET(thread_args->numCore, &cpuset);
+    //sched_setaffinity(0, sizeof(cpuset), &cpuset);
+    register double x, y, thread_square = 0;
+    const double    thread_low_x = thread_args->low_x,
+                    thread_low_y = thread_args->low_y,
+                    thread_step_x = thread_args->step_x,
+                    thread_step_y = thread_args->step_y;
     srand((unsigned) time(NULL));
     for (long long unsigned i = 0; i < THREADS_POINTS; i++)
     {
-        x = thread_args->low_x + (double) rand_r(&seed) / RAND_MAX * (thread_args->step_x);
-        y = thread_args->low_y + (double) rand_r(&seed) / RAND_MAX * (thread_args->step_y);
+        x = thread_low_x + (double) rand_r(&seed) / RAND_MAX * (thread_step_x);
+        y = thread_low_y + (double) rand_r(&seed) / RAND_MAX * (thread_step_y);
 
         if (y < func(x)) 
-            thread_args->square += 1;
+            thread_square += 1;
     }
     pthread_mutex_lock(&m);
-    square += thread_args->square;
+    square += thread_square;
     pthread_mutex_unlock(&m);    
     return NULL;
 }
@@ -63,13 +74,16 @@ int experiment(double *exp_square, double *exp_time)
     pthread_t   tread[CNT_THREADS];
     Thread_args  tread_args[CNT_THREADS];
 
+    //numCore = sysconf(_SC_NPROCESSORS_ONLN);
+    //sCPU_ZERO(&cpuset);
+
     for (long long unsigned i = 0; i < CNT_THREADS; i++)
     {
         tread_args[i].low_x     = left_x + step_x * (i % THREADS_ON_SIDE_X);
         tread_args[i].step_x    = step_x;
         tread_args[i].low_y     = low_y + step_y * (i / THREADS_ON_SIDE_X);
         tread_args[i].step_y    = step_y;
-        tread_args[i].square    = 0;
+        //tread_args[i].numCore   = 1 << (i % numCore);
     }
 
     seed = (unsigned) time(NULL);
@@ -110,5 +124,6 @@ int main()
         return -1;
     fprintf(file, "%lf\n", exp_time);
     fclose(file);
+    printf("square = %lf\n", square);
     return 0;
 }
