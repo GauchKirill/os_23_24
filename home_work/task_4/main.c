@@ -1,12 +1,11 @@
-#include <math.h>
+#define _GNU_SOURCE
 #include <stdlib.h>
 #include <sys/time.h>
 #include <string.h>
-#define _GNU_SOURCE
-#include <sched.h>
 #include <pthread.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <sched.h>
 
 #include "settings.h"
 
@@ -14,8 +13,7 @@ static const long long unsigned CNT_THREADS         = THREADS_ON_SIDE_X * THREAD
 static const long long unsigned THREADS_POINTS      = CNT_POINTS / CNT_THREADS;
 static double square = 0.0;
 
-//static long numCore = 0;
-//static cpu_set_t cpuset;
+static long numCore = 0;
 
 unsigned int seed = 0;
 
@@ -38,8 +36,12 @@ typedef struct Thread_args_
 void* thread_func(void *data)
 {
     Thread_args *thread_args = (Thread_args*) data;
-    //CPU_SET(thread_args->numCore, &cpuset);
-    //sched_setaffinity(0, sizeof(cpuset), &cpuset);
+    
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(thread_args->numCore, &cpuset);
+    sched_setaffinity(0, sizeof(cpuset), &cpuset);
+    
     register double x, y, thread_square = 0;
     const double    thread_low_x = thread_args->low_x,
                     thread_low_y = thread_args->low_y,
@@ -74,8 +76,7 @@ int experiment(double *exp_square, double *exp_time)
     pthread_t   tread[CNT_THREADS];
     Thread_args  tread_args[CNT_THREADS];
 
-    //numCore = sysconf(_SC_NPROCESSORS_ONLN);
-    //sCPU_ZERO(&cpuset);
+    numCore = sysconf(_SC_NPROCESSORS_ONLN);
 
     for (long long unsigned i = 0; i < CNT_THREADS; i++)
     {
@@ -83,7 +84,7 @@ int experiment(double *exp_square, double *exp_time)
         tread_args[i].step_x    = step_x;
         tread_args[i].low_y     = low_y + step_y * (i / THREADS_ON_SIDE_X);
         tread_args[i].step_y    = step_y;
-        //tread_args[i].numCore   = 1 << (i % numCore);
+        tread_args[i].numCore   = 1 << (i % numCore);
     }
 
     seed = (unsigned) time(NULL);

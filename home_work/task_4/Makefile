@@ -9,7 +9,7 @@ all: build run clean
 rebuild: clean build
 
 build: ${SOURCES}
-	gcc ${FLAGS} ${SOURCES} -o ${TARGET}
+	gcc ${SOURCES} ${FLAGS} -o ${TARGET}
 
 run:
 	./${TARGET}
