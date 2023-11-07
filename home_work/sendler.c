@@ -6,7 +6,7 @@
 
 #define BUF_SZ (4096 / sizeof(int))
 
-void handler(int signo) { return; };
+void handler(int signo, siginfo_t *info, void *context) { return; }
 
 int main(int argc, char* argv[])
 {
@@ -29,7 +29,7 @@ int main(int argc, char* argv[])
     while(fread(&rec_pid, sizeof(int), 1, pid_file) != 1);
     fclose(pid_file);
 
-    int data[BUF_SZ] = {};
+    int data[BUF_SZ] = {0};
 
     union sigval val;
     struct sigaction sa;

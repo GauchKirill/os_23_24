@@ -23,3 +23,4 @@ run:
 clean:
 	rm ${SENDLER_TARGET}
 	rm ${RECEIVER_TARGET}
+	rm pid
