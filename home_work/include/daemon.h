@@ -1,6 +1,6 @@
 #ifndef DAEMON_H
 #define DAEMON_H
 
-void daemon(int argc, char** argv);
+int run_daemon(int argc, const char** argv);
 
 #endif

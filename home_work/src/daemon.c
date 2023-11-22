@@ -8,8 +8,12 @@
 #include <errno.h>
 #include <sys/stat.h>
 #include <signal.h>
+#include <linux/limits.h>
+#include <dirent.h>
 
 int settings_process(int);
+int MonitorProc(int);
+void search_directory(const char *name, const char *mnt_dir);
 
 static unsigned period = 1000;
 static unsigned exit_val = 0;
@@ -42,9 +46,7 @@ void SetPidFile(char* filename)
     }
 }
 
-int MonitorProc(int pid, const char* work_dir);
-
-int daemon(int argc, const char** argv)
+int run_daemon(int argc, const char** argv)
 {
     if (argc < 3 || argc > 4)
     {
@@ -61,8 +63,7 @@ int daemon(int argc, const char** argv)
     
     if (MODE & INTERACTIVE_MODE)
     {
-       MonitorProc(pid, work_dir);
-       return 0; 
+       return MonitorProc(pid);
     }
     else
     {
@@ -85,9 +86,9 @@ int daemon(int argc, const char** argv)
         close(STDOUT_FILENO);
         close(STDERR_FILENO);
 
-        return MonitorProc(pid, work_dir);
+        return MonitorProc(pid);
     }
-    return;
+    return 0;
 }
 
 void handler(int signo, siginfo_t *info, void *context)
@@ -95,7 +96,7 @@ void handler(int signo, siginfo_t *info, void *context)
     switch(signo)
     {
         case SIGUSR1:
-            period = info->si_value.sigval_int;
+            period = info->si_value.sival_int;
             break;
         case SIGUSR2:
             exit_val = 1;
@@ -104,7 +105,7 @@ void handler(int signo, siginfo_t *info, void *context)
     return;
 }
 
-int MonitorProc(int pid, const char* work_dir)
+int MonitorProc(int pid)
 {
     int new_pid = fork();
 
@@ -124,14 +125,18 @@ int MonitorProc(int pid, const char* work_dir)
     sigaction(SIGUSR1, &sa, NULL);
     sigaction(SIGUSR2, &sa, NULL);
 
+    char cwd[PATH_MAX];
+    sprintf(cwd, "/proc/%d/cwd/", pid);
+    
     while (1)
     {
         sleep(period);
         if (exit_val)
         {
-
+            return 0;
         }
 
+        search_directory(cwd);
     }
 }
 
@@ -155,6 +160,7 @@ int settings_process(int child_pid)
         if (period == 0)
         {
             kill(child_pid, SIGUSR2);
+            fclose(settigs_file);
             return 0;
         }
         else
@@ -163,4 +169,34 @@ int settings_process(int child_pid)
             sigqueue(child_pid, SIGUSR1, val);
         }
     }
+}
+
+void search_directory(const char *name, const char *mnt_name)
+{
+    DIR *cur_dir = opendir(name);
+    if (cur_dir)
+    {
+        char path[PATH_MAX], *end_ptr = path;
+        struct stat info;
+        struct dirent *dir;
+        strcpy(path, name);
+        end_ptr += strlen(name);
+        while ((dir = readdir(cur_dir)) != NULL) {
+            strcpy(end_ptr, dir -> d_name);
+
+            if (!stat(path, &info)) { 
+                if (S_ISDIR(info.st_mode)) {
+                    if (!strcmp(dir -> d_name, ".." ) == 0 || !strcmp(dir -> d_name, "." ) == 0)
+                        continue;
+
+                    search_directory(strcat(path,"/"));
+                } else if (S_ISREG(info.st_mode)) {
+                    printf("reg_file: %s\n", path);
+                }
+            } else {
+                perror("stat");
+            }
+        }
+    }
+    return;
 }
