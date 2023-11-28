@@ -10,27 +10,36 @@
 #include <signal.h>
 #include <linux/limits.h>
 #include <dirent.h>
+#include <fcntl.h>
+#include <sys/inotify.h>
 
 int settings_process(int);
-int MonitorProc(int);
-void search_directory(const char *name, const char *mnt_dir);
+int MonitorProc(int, const char*);
+void watch_directory(const char *name, const char* dump);
+void search_directory(const char* name, const char* dump);
 
-static unsigned period = 1000;
+static unsigned period = 1;
 static unsigned exit_val = 0;
+
+#define BUF_SZ 100
+#define EVENT_SIZE  (sizeof(struct inotify_event))
+#define BUF_LEN     (1024 * (EVENT_SIZE + 16))
 
 enum modes
 {
-    INTERACTIVE_MODE = 1 << 0,
+    INTERACTIVE_MODE,
+    DAEMON_MODE,
 };
 
 void help()
 {
     printf(
     "Rules for submitting arguments:\n"
-    "PID, WorkDirectory *flag\n"
+    "PID, work_dir, *flag\n"
     "* -- optional argument\n"
     "flags:\n"
-    "-i -- interactive mode\n");
+    "-i -- interactive mode\n"
+    "-d -- launch daemon\n");
     return;
 }
 
@@ -55,15 +64,14 @@ int run_daemon(int argc, const char** argv)
     }
 
     int pid = atoi(argv[1]);
-    const char* work_dir = argv[2];
-    unsigned MODE = 0;
+    unsigned MODE = INTERACTIVE_MODE;
 
-    if (argc == 4 && strncmp(argv[2], "-i", 3) == 0)
-        MODE |= INTERACTIVE_MODE;
+    if (argc == 4 && strncmp(argv[3], "-d", 3) == 0)
+        MODE = DAEMON_MODE;
     
-    if (MODE & INTERACTIVE_MODE)
+    if (MODE == INTERACTIVE_MODE)
     {
-       return MonitorProc(pid);
+       return MonitorProc(pid, argv[2]);
     }
     else
     {
@@ -86,7 +94,7 @@ int run_daemon(int argc, const char** argv)
         close(STDOUT_FILENO);
         close(STDERR_FILENO);
 
-        return MonitorProc(pid);
+        return MonitorProc(pid, argv[2]);
     }
     return 0;
 }
@@ -105,18 +113,17 @@ void handler(int signo, siginfo_t *info, void *context)
     return;
 }
 
-int MonitorProc(int pid)
+int MonitorProc(int pid, const char* dump)
 {
     int new_pid = fork();
-
     if (new_pid < 0)
     {
         perror("fork");
         return -1;
     }
 
-    if (new_pid)
-        return settings_process(new_pid);
+    if (new_pid == 0)
+        return settings_process(getppid());
     
     union sigval val;
     struct sigaction sa;
@@ -125,9 +132,11 @@ int MonitorProc(int pid)
     sigaction(SIGUSR1, &sa, NULL);
     sigaction(SIGUSR2, &sa, NULL);
 
-    char cwd[PATH_MAX];
-    sprintf(cwd, "/proc/%d/cwd/", pid);
-    
+    char pathname[PATH_MAX];
+    sprintf(pathname, "/proc/%d/cwd/", pid);
+    char dump_dir[PATH_MAX];
+    sprintf(dump_dir, "%s/%d_dump", dump, pid);
+
     while (1)
     {
         sleep(period);
@@ -136,16 +145,17 @@ int MonitorProc(int pid)
             return 0;
         }
 
-        search_directory(cwd);
+        watch_directory(pathname, dump_dir);
     }
+    return 0;
 }
 
-int settings_process(int child_pid)
+int settings_process(int reciever_pid)
 {
-    FILE* settigs_file = fopen("daemon.cfg", "r+");
-    if (!settigs_file)
+    int file_fd = open("daemon.cfg", O_CREAT | O_RDONLY);
+    if (file_fd < 0)
     {
-        kill(child_pid, SIGKILL);
+        kill(reciever_pid, SIGKILL);
         return -1;
     }
 
@@ -153,50 +163,71 @@ int settings_process(int child_pid)
     struct sigaction sa;
     sa.sa_flags = SA_SIGINFO;
 
+    char buf[BUF_SZ] = {0};
     while (1)
     {
-        while (fread(&period, sizeof(int), 1, settigs_file) == 0);
-        
-        if (period == 0)
+        while (read(file_fd, buf, sizeof(int)) == 0);
+        if (sscanf(buf, "%d", &period) == 0)
         {
-            kill(child_pid, SIGUSR2);
-            fclose(settigs_file);
-            return 0;
+            kill(reciever_pid, SIGUSR2);
+            break;   
         }
-        else
-        {            
-            val.sival_int = period;
-            sigqueue(child_pid, SIGUSR1, val);
-        }
+        val.sival_int = period;
+        sigqueue(reciever_pid, SIGUSR1, val);
     }
+    return 0;
 }
 
-void search_directory(const char *name, const char *mnt_name)
+void watch_directory(const char *name, const char* dump)
 {
-    DIR *cur_dir = opendir(name);
-    if (cur_dir)
+    search_directory(name, dump);
+    size_t length = 0, i = 0;
+    int fd, wd;
+    char event_buffer[BUF_LEN];
+
+    fd = inotify_init();
+    if (fd < 0)
     {
-        char path[PATH_MAX], *end_ptr = path;
-        struct stat info;
-        struct dirent *dir;
-        strcpy(path, name);
-        end_ptr += strlen(name);
-        while ((dir = readdir(cur_dir)) != NULL) {
-            strcpy(end_ptr, dir -> d_name);
+        perror("inotify_init");
+    }
 
-            if (!stat(path, &info)) { 
-                if (S_ISDIR(info.st_mode)) {
-                    if (!strcmp(dir -> d_name, ".." ) == 0 || !strcmp(dir -> d_name, "." ) == 0)
-                        continue;
+    wd = inotify_add_watch(fd, ".",
+        IN_MODIFY | IN_CREATE | IN_DELETE);
+    length = read(fd, event_buffer, BUF_LEN);
 
-                    search_directory(strcat(path,"/"));
-                } else if (S_ISREG(info.st_mode)) {
-                    printf("reg_file: %s\n", path);
-                }
-            } else {
-                perror("stat");
+    if (length < 0) {
+        perror("read");
+    }
+
+    while (i < length) {
+        struct inotify_event *event =
+            (struct inotify_event *) &event_buffer[i];
+        if (event->len) {
+            if (event->mask & IN_CREATE) {
+                printf("The file %s was created.\n", event->name);
+            } else if (event->mask & IN_DELETE) {
+                printf("The file %s was deleted.\n", event->name);
+            } else if (event->mask & IN_MODIFY) {
+                printf("The file %s was modified.\n", event->name);
             }
         }
+        i += EVENT_SIZE + event->len;
     }
+
+    (void) inotify_rm_watch(fd, wd);
+    (void) close(fd);
+
+    return 0;
+}
+
+void search_directory(const char* name, const char* dump)
+{
+    DIR* dir = opendir(name);
+
+    if (dir)
+    {
+        
+    }
+
     return;
 }
