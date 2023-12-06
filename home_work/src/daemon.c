@@ -1,233 +1,229 @@
-#include "daemon.h"
-
-#include <stdio.h>
+#include <signal.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdlib.h>
 #include <sys/types.h>
-#include <errno.h>
-#include <sys/stat.h>
-#include <signal.h>
-#include <linux/limits.h>
-#include <dirent.h>
-#include <fcntl.h>
 #include <sys/inotify.h>
+#include <sys/stat.h>
+#include <errno.h>
+#include <signal.h>
+#include <dirent.h>
+#include <sys/time.h>
+#include <linux/limits.h>
+#include <stdbool.h>
+#include <time.h>
+#include "../include/daemon.h"
 
-int settings_process(int);
-int MonitorProc(int, const char*);
-void watch_directory(const char *name, const char* dump);
-void search_directory(const char* name, const char* dump);
+#define dump(STR) fprintf(dump, "%s\n", STR)
+#define EVENT_SIZE (sizeof(struct inotify_event))
+#define BUF_LEN (1023 * (EVENT_SIZE + 16))
+#define ARG_MAX 2097152
+bool CHANGE_CFG = false;
 
-static unsigned period = 1;
-static unsigned exit_val = 0;
-
-#define BUF_SZ 100
-#define EVENT_SIZE  (sizeof(struct inotify_event))
-#define BUF_LEN     (1024 * (EVENT_SIZE + 16))
-
-enum modes
-{
-    INTERACTIVE_MODE,
-    DAEMON_MODE,
-};
-
-void help()
-{
-    printf(
-    "Rules for submitting arguments:\n"
-    "PID, work_dir, *flag\n"
-    "* -- optional argument\n"
-    "flags:\n"
-    "-i -- interactive mode\n"
-    "-d -- launch daemon\n");
-    return;
+void sig_handler(int sig, siginfo_t* info, void* context) {
+    CHANGE_CFG = true;
 }
 
-void SetPidFile(char* filename)
-{
-    FILE* file = NULL;
 
-    file = fopen(filename, "w+");
-    if (file)
+void set_pid_file(char* filename) {
+    FILE* pid_file;
+
+    pid_file = fopen(filename, "w+");
+    if (pid_file)
     {
-        fprintf(file, "%u", getpid());
-        fclose(file);
+        fprintf(pid_file, "%u", getpid());
+        fclose(pid_file);
     }
 }
 
-int run_daemon(int argc, const char** argv)
-{
-    if (argc < 3 || argc > 4)
-    {
-        help();
-        return -1;
-    }
 
-    int pid = atoi(argv[1]);
-    unsigned MODE = INTERACTIVE_MODE;
+int monitor_proc(char* cfg_file) {
+    Config cfg = {};
+    int status = cfg_ctor(&cfg, cfg_file);
+    if (status) return status;
 
-    if (argc == 4 && strncmp(argv[3], "-d", 3) == 0)
-        MODE = DAEMON_MODE;
-    
-    if (MODE == INTERACTIVE_MODE)
-    {
-       return MonitorProc(pid, argv[2]);
-    }
-    else
-    {
-        int daemon_pid = fork();
+    char buffer[BUF_LEN];
 
-        if (daemon_pid < 0)
-        {
-            perror("fork");
-            return -1;
-        }
-        if (daemon_pid)    
-            return 0;
-        
-        umask(0);
-        setsid();
-        SetPidFile("this_daemon.pid");
-        chdir("/");
+    char pathname[256] = "";
+    sprintf(pathname, "/proc/%d/cwd", cfg.pid);
+    chdir(pathname);
 
-        close(STDIN_FILENO);
-        close(STDOUT_FILENO);
-        close(STDERR_FILENO);
+    char cwd[256] = "";
+    getcwd(cwd, sizeof(cwd));
+    add_watch_dir(cwd, &cfg);
 
-        return MonitorProc(pid, argv[2]);
-    }
-    return 0;
-}
-
-void handler(int signo, siginfo_t *info, void *context)
-{
-    switch(signo)
-    {
-        case SIGUSR1:
-            period = info->si_value.sival_int;
-            break;
-        case SIGUSR2:
-            exit_val = 1;
-            break;
-    }
-    return;
-}
-
-int MonitorProc(int pid, const char* dump)
-{
-    int new_pid = fork();
-    if (new_pid < 0)
-    {
-        perror("fork");
-        return -1;
-    }
-
-    if (new_pid == 0)
-        return settings_process(getppid());
-    
-    union sigval val;
     struct sigaction sa;
     sa.sa_flags = SA_SIGINFO;
-    sa.sa_sigaction = handler;
+    sa.sa_sigaction = sig_handler;
+
     sigaction(SIGUSR1, &sa, NULL);
+    sigaction(SIGINT, &sa, NULL);
     sigaction(SIGUSR2, &sa, NULL);
+    sigaction(SIGSTOP, &sa, NULL);
+    sigaction(SIGTERM, &sa, NULL);
 
-    char pathname[PATH_MAX];
-    sprintf(pathname, "/proc/%d/cwd/", pid);
-    char dump_dir[PATH_MAX];
-    sprintf(dump_dir, "%s/%d_dump", dump, pid);
+    while(true) {
+        int i = 0;
 
-    while (1)
-    {
-        sleep(period);
-        if (exit_val)
-        {
-            return 0;
+        if (CHANGE_CFG) {
+            cfg_ctor(&cfg, cfg_file);
+            CHANGE_CFG = false;
         }
 
-        watch_directory(pathname, dump_dir);
+        int length = read(cfg.inotify_fd, buffer, BUF_LEN);
+
+        while(i < length) {
+            struct inotify_event *event = (struct inotify_event *) &buffer[i];
+            if (event->len) {
+                if (event->mask & IN_CREATE) {
+                    backup_crt_file(pathname, event->name, &cfg);
+                } else if (event->mask & IN_DELETE) {
+                } else if (event->mask & IN_MODIFY) {
+                    backup_mod_file(cwd, event->name, &cfg);
+                }
+            }
+            i += EVENT_SIZE + event->len;
+        }
+        sleep(cfg.check_time);
     }
+
+    cfg_detor(&cfg);
+
     return 0;
 }
 
-int settings_process(int reciever_pid)
-{
-    int file_fd = open("daemon.cfg", O_CREAT | O_RDONLY);
-    if (file_fd < 0)
-    {
-        kill(reciever_pid, SIGKILL);
-        return -1;
-    }
+void add_watch_dir(const char* wd, Config* cfg) {
+    DIR* dir = opendir(wd);
 
-    union sigval val;
-    struct sigaction sa;
-    sa.sa_flags = SA_SIGINFO;
+    if (dir) {
+        int inotify_wd = inotify_add_watch(cfg->inotify_fd, wd, IN_MODIFY | IN_CREATE | IN_DELETE);
 
-    char buf[BUF_SZ] = {0};
-    while (1)
-    {
-        while (read(file_fd, buf, sizeof(int)) == 0);
-        if (sscanf(buf, "%d", &period) == 0)
-        {
-            kill(reciever_pid, SIGUSR2);
-            break;   
-        }
-        val.sival_int = period;
-        sigqueue(reciever_pid, SIGUSR1, val);
-    }
-    return 0;
-}
+        cfg->inotify_wds[cfg->inotify_size] = inotify_wd;
+        cfg->inotify_size++;
 
-void watch_directory(const char *name, const char* dump)
-{
-    search_directory(name, dump);
-    size_t length = 0, i = 0;
-    int fd, wd;
-    char event_buffer[BUF_LEN];
+        char path[PATH_MAX];
+        char* end_ptr = path;
+        struct dirent* e;
+        struct stat info;
+        strcpy(path, wd);
+        end_ptr += strlen(wd);
 
-    fd = inotify_init();
-    if (fd < 0)
-    {
-        perror("inotify_init");
-    }
+        while((e = readdir(dir)) != NULL) {
+            sprintf(end_ptr, "/");
+            end_ptr += 1;
+            strcpy(end_ptr, e->d_name);
 
-    wd = inotify_add_watch(fd, ".",
-        IN_MODIFY | IN_CREATE | IN_DELETE);
-    length = read(fd, event_buffer, BUF_LEN);
-
-    if (length < 0) {
-        perror("read");
-    }
-
-    while (i < length) {
-        struct inotify_event *event =
-            (struct inotify_event *) &event_buffer[i];
-        if (event->len) {
-            if (event->mask & IN_CREATE) {
-                printf("The file %s was created.\n", event->name);
-            } else if (event->mask & IN_DELETE) {
-                printf("The file %s was deleted.\n", event->name);
-            } else if (event->mask & IN_MODIFY) {
-                printf("The file %s was modified.\n", event->name);
+            if (!stat(path, &info)) {
+                if (S_ISDIR(info.st_mode)) {
+                    if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) {
+                        end_ptr -= 1;
+                        continue;
+                    }
+                    add_watch_dir(path, cfg);
+                }
             }
         }
-        i += EVENT_SIZE + event->len;
     }
 
-    (void) inotify_rm_watch(fd, wd);
-    (void) close(fd);
+    return;
+}
+
+int backup_crt_file(char* dir_path, char* name, Config* cfg) {
+    char file_name[PATH_MAX] = "";
+    char cmd[ARG_MAX] = "";
+    sprintf(file_name, "%s/found_file", cfg->dump_dir);
+
+    FILE* find_file = fopen(file_name, "w");
+    fclose(find_file);
+    chdir(dir_path);
+    sprintf(cmd, "find -name %s > %s", name, file_name);
+    system(cmd);
+
+    find_file = fopen(file_name, "r");
+    fscanf(find_file, "%s", file_name);
+    fclose(find_file);
+
+    sprintf(cmd, "mkdir %s/%s", cfg->dump_dir, name);
+    system(cmd);
+
+    sprintf(cmd, "cp %s %s/%s.backup", file_name, cfg->dump_dir, name);
+    system(cmd);
 
     return 0;
 }
 
-void search_directory(const char* name, const char* dump)
-{
-    DIR* dir = opendir(name);
+int backup_mod_file(char* dir_path, char* name, Config* cfg) {
+    char file_name[PATH_MAX] = "";
+    char cmd[ARG_MAX] = "";
+    sprintf(file_name, "%s/found_file", cfg->dump_dir);
 
-    if (dir)
-    {
-        
+    FILE* find_file = fopen(file_name, "w");
+    fclose(find_file);
+    chdir(dir_path);
+    sprintf(cmd, "find -name %s > %s", name, file_name);
+    system(cmd);
+
+    find_file = fopen(file_name, "r");
+    fscanf(find_file, "%s", file_name);
+    fclose(find_file);
+
+    sprintf(cmd, "mkdir %s/%s", cfg->dump_dir, name);
+    system(cmd);
+
+    struct timeval diff_time;
+    gettimeofday(&diff_time, NULL);
+    char diff_file[ARG_MAX-5000];
+
+    sprintf(diff_file, "%ld_%ld.diff", diff_time.tv_sec, diff_time.tv_usec);
+
+    sprintf(cmd, "diff %s %s/%s.backup > %s/%s/%s", file_name, cfg->dump_dir, name, cfg->dump_dir, name, diff_file);
+    system(cmd);
+
+    sprintf(cmd, "cp %s %s/%s.backup", file_name, cfg->dump_dir, name);
+    system(cmd);
+
+    return 0;
+}
+
+int cfg_ctor(Config* cfg, char* cfg_file_name) {
+    FILE* cfg_file = fopen(cfg_file_name, "r");
+    if (!cfg_file) {
+        printf("Cannot open config file\n");
+        return -1;
     }
 
-    return;
+    int check_time = 0;
+    int pid = 0;
+    if( fscanf(cfg_file, "%d %d %s", &check_time, &pid, cfg->dump_dir) != 3) return -1;
+
+    cfg->check_time = check_time;
+    cfg->pid = pid;
+
+    char cmd[PATH_MAX];
+    sprintf(cmd, "mkdir %s", cfg->dump_dir);
+    system(cmd);
+
+    cfg->inotify_fd = inotify_init();
+
+    fclose(cfg_file);
+
+    cfg->inotify_capacity = 200;
+    cfg->inotify_size = 0;
+    cfg->inotify_wds = (int*) calloc(cfg->inotify_capacity, sizeof(int));
+
+    return 0;
+}
+
+int cfg_dtor(Config* cfg) {
+    for (int i = 0; i < cfg->inotify_size; i++) {
+        inotify_rm_watch(cfg->inotify_fd, cfg->inotify_wds[i]);
+    }
+
+    close(cfg->inotify_fd);
+
+    free(cfg->inotify_wds);
+
+    return 0;
 }
