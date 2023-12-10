@@ -13,10 +13,17 @@
 #include <sys/time.h>
 #include <linux/limits.h>
 #include <stdbool.h>
-#include <time.h>
-#include "../include/daemon.h"
+#include "daemon.h"
 
-#define dump(STR) fprintf(dump, "%s\n", STR)
+#define DEBUG
+
+#ifdef DEBUG
+#define DBG if(true)
+#endif
+#ifndef DEBUG
+#define DBG if(false)
+#endif
+
 #define EVENT_SIZE (sizeof(struct inotify_event))
 #define BUF_LEN (1023 * (EVENT_SIZE + 16))
 #define ARG_MAX 2097152
@@ -40,9 +47,8 @@ void set_pid_file(char* filename) {
 
 
 int monitor_proc(char* cfg_file) {
-    Config cfg = {};
-    int status = cfg_ctor(&cfg, cfg_file);
-    if (status) return status;
+    struct Config_ cfg = {};
+    cfg_ctor(&cfg, cfg_file);
 
     char buffer[BUF_LEN];
 
@@ -51,8 +57,9 @@ int monitor_proc(char* cfg_file) {
     chdir(pathname);
 
     char cwd[256] = "";
-    getcwd(cwd, sizeof(cwd));
-    add_watch_dir(cwd, &cfg);
+    if ((getcwd(cwd, sizeof(cwd))) != NULL) {
+        add_watch_dir(cwd, &cfg);
+    }
 
     struct sigaction sa;
     sa.sa_flags = SA_SIGINFO;
@@ -63,6 +70,7 @@ int monitor_proc(char* cfg_file) {
     sigaction(SIGUSR2, &sa, NULL);
     sigaction(SIGSTOP, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
+
 
     while(true) {
         int i = 0;
@@ -86,6 +94,7 @@ int monitor_proc(char* cfg_file) {
             }
             i += EVENT_SIZE + event->len;
         }
+
         sleep(cfg.check_time);
     }
 
@@ -133,11 +142,12 @@ void add_watch_dir(const char* wd, Config* cfg) {
 int backup_crt_file(char* dir_path, char* name, Config* cfg) {
     char file_name[PATH_MAX] = "";
     char cmd[ARG_MAX] = "";
-    sprintf(file_name, "%s/found_file", cfg->dump_dir);
+    sprintf(file_name, "%s/find_file", cfg->dump_dir);
 
     FILE* find_file = fopen(file_name, "w");
     fclose(find_file);
     chdir(dir_path);
+    
     sprintf(cmd, "find -name %s > %s", name, file_name);
     system(cmd);
 
@@ -145,10 +155,23 @@ int backup_crt_file(char* dir_path, char* name, Config* cfg) {
     fscanf(find_file, "%s", file_name);
     fclose(find_file);
 
-    sprintf(cmd, "mkdir %s/%s", cfg->dump_dir, name);
-    system(cmd);
+    char real_file_name[PATH_MAX] = "";
+    sprintf(real_file_name, "%s/%s", dir_path, file_name+2);
+    printf("%s\nfile name:%s\n", real_file_name, file_name+2);
+    struct stat info;
+    if (!stat(real_file_name, &info))
+    {
+        if (S_ISDIR(info.st_mode))
+        {
+            sprintf(cmd, "mkdir %s/%s", cfg->dump_dir, file_name+2);
+            system(cmd);
+        }
+        add_watch_dir(real_file_name, cfg);
 
-    sprintf(cmd, "cp %s %s/%s.backup", file_name, cfg->dump_dir, name);
+        return 0;
+    }
+
+    sprintf(cmd, "cp %s %s/%s.backup", real_file_name, cfg->dump_dir, file_name+2);
     system(cmd);
 
     return 0;
@@ -157,7 +180,7 @@ int backup_crt_file(char* dir_path, char* name, Config* cfg) {
 int backup_mod_file(char* dir_path, char* name, Config* cfg) {
     char file_name[PATH_MAX] = "";
     char cmd[ARG_MAX] = "";
-    sprintf(file_name, "%s/found_file", cfg->dump_dir);
+    sprintf(file_name, "%s/find_file", cfg->dump_dir);
 
     FILE* find_file = fopen(file_name, "w");
     fclose(find_file);
@@ -169,19 +192,10 @@ int backup_mod_file(char* dir_path, char* name, Config* cfg) {
     fscanf(find_file, "%s", file_name);
     fclose(find_file);
 
-    sprintf(cmd, "mkdir %s/%s", cfg->dump_dir, name);
-    system(cmd);
+    char real_file_name[PATH_MAX] = "";
+    sprintf(real_file_name, "%s/%s", dir_path, file_name+2);
 
-    struct timeval diff_time;
-    gettimeofday(&diff_time, NULL);
-    char diff_file[ARG_MAX-5000];
-
-    sprintf(diff_file, "%ld_%ld.diff", diff_time.tv_sec, diff_time.tv_usec);
-
-    sprintf(cmd, "diff %s %s/%s.backup > %s/%s/%s", file_name, cfg->dump_dir, name, cfg->dump_dir, name, diff_file);
-    system(cmd);
-
-    sprintf(cmd, "cp %s %s/%s.backup", file_name, cfg->dump_dir, name);
+    sprintf(cmd, "cp %s %s/%s.backup", real_file_name, cfg->dump_dir, file_name+2);
     system(cmd);
 
     return 0;
@@ -191,12 +205,12 @@ int cfg_ctor(Config* cfg, char* cfg_file_name) {
     FILE* cfg_file = fopen(cfg_file_name, "r");
     if (!cfg_file) {
         printf("Cannot open config file\n");
-        return -1;
+        return 0;
     }
 
     int check_time = 0;
     int pid = 0;
-    if( fscanf(cfg_file, "%d %d %s", &check_time, &pid, cfg->dump_dir) != 3) return -1;
+    fscanf(cfg_file, "%d %d %s", &check_time, &pid, cfg->dump_dir);
 
     cfg->check_time = check_time;
     cfg->pid = pid;
@@ -216,7 +230,7 @@ int cfg_ctor(Config* cfg, char* cfg_file_name) {
     return 0;
 }
 
-int cfg_dtor(Config* cfg) {
+int cfg_dtor(struct Config_* cfg) {
     for (int i = 0; i < cfg->inotify_size; i++) {
         inotify_rm_watch(cfg->inotify_fd, cfg->inotify_wds[i]);
     }

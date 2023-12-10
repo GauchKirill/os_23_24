@@ -1,6 +1,3 @@
-#ifndef DAEMON_H
-#define DAEMON_H
-
 #include <signal.h>
 #include <stdio.h>
 
@@ -18,7 +15,7 @@ void set_pid_file(char* filename);
 
 int monitor_proc(char* filename);
 
-int cfg_ctor(Config* cfg, char* cfg_file_name);
+int cfg_ctor(struct Config_* cfg, char* cfg_file_name);
 
 int cfg_detor(Config* cfg);
 
@@ -31,5 +28,3 @@ int backup_mod_file(char* dir_path, char* name, Config* cfg);
 int backup_crt_file(char* dir_path, char* name, Config* cfg);
 
 int create_new_backup(char* path, char* name, Config* cfg);
-
-#endif
